@@ -151,6 +151,70 @@ async function readPdf(file) {
   }
 }
 
+function samePageWorld() {
+  try {
+    if (typeof unsafeWindow === 'undefined' || unsafeWindow == null) return true;
+    return unsafeWindow === window;
+  } catch (_) {
+    return true;
+  }
+}
+
+// 桌面端把同一段填写脚本放进网页里执行。油猴默认隔着一层，新造的鼠标事件北森下拉不认。
+function runApply(writes) {
+  if (samePageWorld()) return pageApi.applyPageWrites(writes);
+  const id = `gj-na-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const holder = document.createElement('textarea');
+  holder.id = id;
+  holder.hidden = true;
+  holder.setAttribute('aria-hidden', 'true');
+  document.documentElement.appendChild(holder);
+  const parts = pageApi.applyParts(writes);
+  const program = `(async function(){
+    var holder = document.getElementById(${JSON.stringify(id)});
+    if (holder) holder.setAttribute('data-gj-started', '1');
+    var value = [];
+    try {
+      ${parts.prelude}
+      value = await (${parts.call});
+    } catch (err) {
+      value = [];
+    }
+    if (!holder) return;
+    try { holder.value = JSON.stringify(value == null ? [] : value); }
+    catch (err) { holder.value = '[]'; }
+    holder.setAttribute('data-gj-done', '1');
+  })();`;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(slowTimer);
+      clearTimeout(startTimer);
+      observer.disconnect();
+      if (holder.isConnected) holder.remove();
+      resolve(value);
+    };
+    const observer = new MutationObserver(() => {
+      if (holder.getAttribute('data-gj-done') !== '1') return;
+      let parsed = [];
+      try { parsed = JSON.parse(holder.value || '[]'); } catch (_) { parsed = []; }
+      finish(Array.isArray(parsed) ? parsed : []);
+    });
+    observer.observe(holder, { attributes: true, attributeFilter: ['data-gj-done'] });
+    const startTimer = setTimeout(() => {
+      if (holder.getAttribute('data-gj-started') === '1') return;
+      Promise.resolve(pageApi.applyPageWrites(writes)).then(finish);
+    }, 800);
+    const slowTimer = setTimeout(() => finish([]), 180000);
+    const script = document.createElement('script');
+    script.textContent = program;
+    document.documentElement.appendChild(script);
+    script.remove();
+  });
+}
+
 function boot() {
   const saved = readSaved();
   const state = {
@@ -469,8 +533,8 @@ function boot() {
     const planned = core.planRuleFills(collected.fields, saved.profile);
     let applied = planned.writes.slice();
     try {
-      if (planned.writes.length) {
-        const readback = await pageApi.applyPageWrites(planned.writes);
+        if (planned.writes.length) {
+        const readback = await runApply(planned.writes);
         applied = markReadback(planned.writes, readback);
       }
     } catch (_) {

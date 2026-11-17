@@ -1383,9 +1383,16 @@ function collectScript() {
   return `(${collectPageFields.toString()})()`;
 }
 
-function applyScript(writes) {
+function embedJson(value) {
+  return JSON.stringify(Array.isArray(value) ? value : [])
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function applyParts(writes) {
   const bind = (name, fn) => `var ${name} = ${typeof fn === 'function' ? fn.toString() : 'function(){return null;}'};`;
-  return [
+  const prelude = [
     bind('normText', normText),
     bind('moneyYuan', moneyYuan),
     bind('salaryYuan', salaryYuan),
@@ -1395,8 +1402,13 @@ function applyScript(writes) {
     bind('scoreSalaryOption', scoreSalaryOption),
     bind('scoreArrivalOption', scoreArrivalOption),
     bind('scoreApproxOption', scoreApproxOption),
-    `(${applyPageWrites.toString()})(${JSON.stringify(Array.isArray(writes) ? writes : [])})`,
   ].join('\n');
+  return { prelude, call: `(${applyPageWrites.toString()})(${embedJson(writes)})` };
+}
+
+function applyScript(writes) {
+  const parts = applyParts(writes);
+  return `${parts.prelude}\n${parts.call}`;
 }
 
 function readPageValues(ids) {
@@ -1469,6 +1481,7 @@ module.exports = {
   applyPageWrites,
   scrollToNetApplyField,
   collectScript,
+  applyParts,
   applyScript,
   scrollScript,
   readScript,

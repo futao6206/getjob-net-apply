@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网申自动填写
 // @namespace    https://github.com/futao6206/getjob-net-apply
-// @version      1.1.0
+// @version      1.1.1
 // @description  在北森、大易、Moka、国聘等网申页，用本机简历填写报名表。免费，不代提交。
 // @match        http://*/*
 // @match        https://*/*
@@ -10,6 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addStyle
+// @inject-into  page
 // @license      MIT
 // @downloadURL  https://raw.githubusercontent.com/futao6206/getjob-net-apply/main/dist/getjob-net-apply.user.js
 // @updateURL    https://raw.githubusercontent.com/futao6206/getjob-net-apply/main/dist/getjob-net-apply.user.js
@@ -2729,9 +2730,12 @@ ${sample}`) && fillable < 3;
       function collectScript() {
         return `(${collectPageFields.toString()})()`;
       }
-      function applyScript(writes) {
+      function embedJson(value) {
+        return JSON.stringify(Array.isArray(value) ? value : []).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+      }
+      function applyParts(writes) {
         const bind = (name, fn) => `var ${name} = ${typeof fn === "function" ? fn.toString() : "function(){return null;}"};`;
-        return [
+        const prelude = [
           bind("normText", normText),
           bind("moneyYuan", moneyYuan),
           bind("salaryYuan", salaryYuan),
@@ -2740,9 +2744,14 @@ ${sample}`) && fillable < 3;
           bind("scoreYearOption", scoreYearOption),
           bind("scoreSalaryOption", scoreSalaryOption),
           bind("scoreArrivalOption", scoreArrivalOption),
-          bind("scoreApproxOption", scoreApproxOption),
-          `(${applyPageWrites.toString()})(${JSON.stringify(Array.isArray(writes) ? writes : [])})`
+          bind("scoreApproxOption", scoreApproxOption)
         ].join("\n");
+        return { prelude, call: `(${applyPageWrites.toString()})(${embedJson(writes)})` };
+      }
+      function applyScript(writes) {
+        const parts = applyParts(writes);
+        return `${parts.prelude}
+${parts.call}`;
       }
       function readPageValues(ids) {
         const wanted = {};
@@ -2811,6 +2820,7 @@ ${sample}`) && fillable < 3;
         applyPageWrites,
         scrollToNetApplyField,
         collectScript,
+        applyParts,
         applyScript,
         scrollScript,
         readScript
@@ -2964,6 +2974,71 @@ ${sample}`) && fillable < 3;
     } catch (_) {
       return { ok: false, message: FAIL_PDF };
     }
+  }
+  function samePageWorld() {
+    try {
+      if (typeof unsafeWindow === "undefined" || unsafeWindow == null) return true;
+      return unsafeWindow === window;
+    } catch (_) {
+      return true;
+    }
+  }
+  function runApply(writes) {
+    if (samePageWorld()) return pageApi.applyPageWrites(writes);
+    const id = `gj-na-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const holder = document.createElement("textarea");
+    holder.id = id;
+    holder.hidden = true;
+    holder.setAttribute("aria-hidden", "true");
+    document.documentElement.appendChild(holder);
+    const parts = pageApi.applyParts(writes);
+    const program = `(async function(){
+    var holder = document.getElementById(${JSON.stringify(id)});
+    if (holder) holder.setAttribute('data-gj-started', '1');
+    var value = [];
+    try {
+      ${parts.prelude}
+      value = await (${parts.call});
+    } catch (err) {
+      value = [];
+    }
+    if (!holder) return;
+    try { holder.value = JSON.stringify(value == null ? [] : value); }
+    catch (err) { holder.value = '[]'; }
+    holder.setAttribute('data-gj-done', '1');
+  })();`;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(slowTimer);
+        clearTimeout(startTimer);
+        observer.disconnect();
+        if (holder.isConnected) holder.remove();
+        resolve(value);
+      };
+      const observer = new MutationObserver(() => {
+        if (holder.getAttribute("data-gj-done") !== "1") return;
+        let parsed = [];
+        try {
+          parsed = JSON.parse(holder.value || "[]");
+        } catch (_) {
+          parsed = [];
+        }
+        finish(Array.isArray(parsed) ? parsed : []);
+      });
+      observer.observe(holder, { attributes: true, attributeFilter: ["data-gj-done"] });
+      const startTimer = setTimeout(() => {
+        if (holder.getAttribute("data-gj-started") === "1") return;
+        Promise.resolve(pageApi.applyPageWrites(writes)).then(finish);
+      }, 800);
+      const slowTimer = setTimeout(() => finish([]), 18e4);
+      const script = document.createElement("script");
+      script.textContent = program;
+      document.documentElement.appendChild(script);
+      script.remove();
+    });
   }
   function boot() {
     const saved = readSaved();
@@ -3269,7 +3344,7 @@ ${sample}`) && fillable < 3;
       let applied = planned.writes.slice();
       try {
         if (planned.writes.length) {
-          const readback = await pageApi.applyPageWrites(planned.writes);
+          const readback = await runApply(planned.writes);
           applied = markReadback(planned.writes, readback);
         }
       } catch (_) {
