@@ -1,6 +1,6 @@
 {
   "name": "getjob-net-apply",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "MIT",
   "description": "在公司招聘页用本机简历填写报名表。免费，不代点提交。",

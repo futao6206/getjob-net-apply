@@ -160,14 +160,38 @@ function boot() {
     profile: Object.assign({}, saved.profile),
     sources: Object.assign({}, saved.sources),
     message: '',
+    savedNote: false,
+    panelHeight: 0,
     rows: [],
   };
 
   let shadow = null;
+  let saveTimer = null;
 
-  function draftDirty() {
-    const current = readSaved();
-    return core.FIELD_KEYS.some((key) => String(state.profile[key] || '') !== String(current.profile[key] || ''));
+  function writeNow() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    const next = writeSaved(state.profile, state.sources);
+    state.savedNote = true;
+    const active = shadow && shadow.activeElement;
+    core.FIELD_KEYS.forEach((key) => {
+      state.sources[key] = next.sources[key];
+      if (active && active.getAttribute && active.getAttribute('data-key') === key) return;
+      state.profile[key] = next.profile[key];
+    });
+  }
+
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      writeSaved(state.profile, state.sources);
+      state.savedNote = true;
+      const note = shadow && shadow.querySelector('[data-save-state]');
+      if (note) note.textContent = '已自动保存在这台电脑。';
+    }, 400);
   }
 
   function syncFromDom() {
@@ -200,18 +224,23 @@ function boot() {
 
   function resultsHtml() {
     if (!state.rows.length) return '';
-    const groups = [
-      ['filled', '已填'],
-      ['check', '待核对'],
-      ['miss', '留空'],
-    ];
-    return groups.map(([status, title]) => {
-      const rows = state.rows.filter((row) => row.status === status);
-      const items = rows.length
-        ? rows.map((row) => `<li><b>${esc(row.label || '未命名')}</b> ${esc(row.text || '')}</li>`).join('')
-        : '<li class="muted">无</li>';
-      return `<section class="result"><h3>${title}</h3><ul>${items}</ul></section>`;
-    }).join('');
+    const groups = { filled: [], check: [], miss: [] };
+    state.rows.forEach((row, index) => {
+      const bucket = row.status === 'filled' ? 'filled' : (row.status === 'check' ? 'check' : 'miss');
+      groups[bucket].push(Object.assign({ index }, row));
+    });
+    const rowHtml = (row) => {
+      const copy = row.copy ? `<em data-act="copy" data-row="${row.index}">复制</em>` : '';
+      const fix = row.fix ? `<em data-act="fix" data-fix="${esc(row.fix)}">去补</em>` : '';
+      const text = row.text || '';
+      return `<button type="button" class="hit" data-act="scroll" data-id="${esc(row.id)}"><b>${esc(row.label || '未命名')}</b><span title="${esc(text)}">${esc(text)}</span>${copy}${fix}</button>`;
+    };
+    const group = (title, list) => (list.length ? `<div class="bucket"><div class="group">${title}</div>${list.map(rowHtml).join('')}</div>` : '');
+    const chip = (cls, title, count) => `<span class="chip ${cls}">${title} ${count}</span>`;
+    return `<div class="result-card">
+      <div class="result-sum">${chip('ok', '已填', groups.filled.length)}${chip('check', '待核对', groups.check.length)}${chip('miss', '没填上', groups.miss.length)}</div>
+      <div class="result-body">${group('已填', groups.filled)}${group('待核对', groups.check)}${group('没填上', groups.miss)}</div>
+    </div>`;
   }
 
   function panelHtml() {
@@ -223,19 +252,20 @@ function boot() {
       const note = section.note ? `<p class="note">${esc(section.note)}</p>` : '';
       return `<section><h2>${esc(section.title)}</h2>${note}${fields}</section>`;
     }).join('');
-    const dirty = draftDirty() ? '<p class="warn">有修改还没保存，这次填写仍用已保存的资料。</p>' : '';
-    return `<div class="panel" role="dialog" aria-label="网申自动填写">
-      <header><strong>网申自动填写</strong><button type="button" data-act="close">收起</button></header>
+    const saveNote = state.savedNote ? '已自动保存在这台电脑。' : '修改会自动保存在这台电脑，不上传。';
+    const heightStyle = state.panelHeight ? ` style="height:${state.panelHeight}px;max-height:${state.panelHeight}px"` : '';
+    return `<div class="panel" role="dialog" aria-label="网申自动填写"${heightStyle}>
+      <div class="resize-top" data-act="resize" title="按住向上拖，加大显示区域"></div>
+      <header data-act="resize"><strong>网申自动填写</strong><button type="button" data-act="close">收起</button></header>
       <div class="body">
-        <p class="lead">用本机简历填当前这一张表。脚本不代点提交。</p>
+        <p class="lead">用上面的资料填写你正在看的这一页。脚本不代点提交。</p>
         ${sections}
         <label class="file">选择文字版 PDF<input type="file" accept="application/pdf,.pdf" data-act="pdf"></label>
         <p class="message" role="status">${esc(state.message)}</p>
-        ${dirty}
+        <p class="hint" data-save-state>${saveNote}</p>
         <div class="actions">
-          <button type="button" data-act="save">保存</button>
           <button type="button" data-act="clear">清空资料</button>
-          <button type="button" data-act="fill">按简历填写</button>
+          <button type="button" data-act="fill">自动填写当前页面</button>
         </div>
         <div class="results">${resultsHtml()}</div>
         <p class="foot"><a href="${PANEL_LINK}" target="_blank" rel="noopener noreferrer">打开 GetJob 官网即可直接体验：${PANEL_LINK}</a></p>
@@ -258,13 +288,10 @@ function boot() {
       if (state.painting) return;
       const el = event.currentTarget;
       const key = el.getAttribute('data-key');
+      if (!key || el.value === state.profile[key]) return;
       state.profile[key] = el.value;
       state.sources[key] = 'user';
-      const warn = shadow.querySelector('.warn');
-      if (!warn && draftDirty()) {
-        const message = shadow.querySelector('.message');
-        if (message) message.insertAdjacentHTML('afterend', '<p class="warn">有修改还没保存，这次填写仍用已保存的资料。</p>');
-      }
+      scheduleSave();
     }
     shadow.querySelectorAll('button, a, input, select, textarea').forEach((el) => {
       el.addEventListener('mousedown', (event) => event.stopPropagation());
@@ -275,6 +302,8 @@ function boot() {
     const close = shadow.querySelector('[data-act="close"]');
     if (close) {
       close.addEventListener('click', () => {
+        syncFromDom();
+        if (saveTimer) writeNow();
         state.open = false;
         state.rows = [];
         state.message = '';
@@ -293,27 +322,78 @@ function boot() {
         if (picked) ingest(picked);
       });
     }
-    const save = shadow.querySelector('[data-act="save"]');
-    if (save) save.addEventListener('click', onSave);
     const clear = shadow.querySelector('[data-act="clear"]');
     if (clear) clear.addEventListener('click', onClear);
     const fill = shadow.querySelector('[data-act="fill"]');
     if (fill) fill.addEventListener('click', onFill);
+    shadow.querySelectorAll('[data-act="resize"]').forEach((el) => {
+      el.addEventListener('pointerdown', startResize);
+    });
+    shadow.querySelectorAll('[data-act="scroll"]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-id');
+        if (id) pageApi.scrollToNetApplyField(id);
+      });
+    });
+    shadow.querySelectorAll('[data-act="copy"]').forEach((el) => {
+      el.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const row = state.rows[Number(el.getAttribute('data-row'))];
+        if (!row || !row.copy) return;
+        const done = () => {
+          state.message = '已复制资料原文。';
+          const message = shadow.querySelector('.message');
+          if (message) message.textContent = state.message;
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(row.copy).then(done).catch(() => {});
+        }
+      });
+    });
+    shadow.querySelectorAll('[data-act="fix"]').forEach((el) => {
+      el.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const field = shadow.querySelector(`[data-key="${el.getAttribute('data-fix') || ''}"]`);
+        if (!field) return;
+        field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        field.focus();
+      });
+    });
   }
 
-  function onSave() {
-    syncFromDom();
-    const next = writeSaved(state.profile, state.sources);
-    state.profile = Object.assign({}, next.profile);
-    state.sources = Object.assign({}, next.sources);
-    state.message = '资料已保存在这台电脑的脚本里。';
-    paint();
+  let resizeDrag = null;
+
+  function startResize(event) {
+    if (event.button != null && event.button !== 0) return;
+    if (event.target && event.target.closest && event.target.closest('button')) return;
+    const panel = shadow && shadow.querySelector('.panel');
+    if (!panel) return;
+    resizeDrag = { startY: event.clientY, height: panel.getBoundingClientRect().height };
+    event.preventDefault();
+  }
+
+  function moveResize(event) {
+    if (!resizeDrag) return;
+    const panel = shadow && shadow.querySelector('.panel');
+    if (!panel) return;
+    const max = Math.max(280, window.innerHeight - 24);
+    const height = Math.round(Math.max(280, Math.min(resizeDrag.height + (resizeDrag.startY - event.clientY), max)));
+    state.panelHeight = height;
+    panel.style.height = `${height}px`;
+    panel.style.maxHeight = `${height}px`;
   }
 
   function onClear() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
     const empty = writeSaved(core.emptyProfile(), core.emptySources());
     state.profile = Object.assign({}, empty.profile);
     state.sources = Object.assign({}, empty.sources);
+    state.savedNote = false;
     state.rows = [];
     state.message = '资料已清空。';
     paint();
@@ -340,16 +420,18 @@ function boot() {
     const merged = core.mergePdfProfile(state.profile, state.sources, extracted);
     state.profile = merged.profile;
     state.sources = merged.sources;
-    state.message = '已从 PDF 写入草稿。核对后点保存，再去报名页填写。';
+    writeNow();
+    state.message = '已从 PDF 写入并自动保存。核对后点「自动填写当前页面」。';
     paint();
   }
 
   async function onFill() {
     if (state.busy) return;
     syncFromDom();
+    writeNow();
     const saved = readSaved();
     if (!core.filledKeys(saved.profile).length) {
-      state.message = '先保存资料，再填写。';
+      state.message = '上面还是空的。先写资料，或选一份 PDF，再点「自动填写当前页面」。';
       state.rows = [];
       paint();
       return;
@@ -419,8 +501,16 @@ function boot() {
         background: #fff; color: #1c1915; border: 1px solid #d9d3c7; border-radius: 12px;
         box-shadow: 0 12px 40px rgba(28, 25, 21, 0.18);
       }
+      .resize-top {
+        flex: none; height: 10px; cursor: ns-resize; position: relative;
+      }
+      .resize-top::after {
+        content: ''; position: absolute; left: 50%; top: 4px; width: 36px; height: 3px;
+        margin-left: -18px; border-radius: 999px; background: #d9d3c7;
+      }
       header, .body { padding: 12px 14px; }
-      header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee6d8; }
+      header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee6d8; cursor: ns-resize; user-select: none; }
+      header button { cursor: pointer; }
       header button, .actions button { border: 1px solid #d9d3c7; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
       .actions button[data-act="fill"] { background: #143d2c; color: #fff; border-color: #143d2c; }
       .body { overflow: auto; }
@@ -433,10 +523,22 @@ function boot() {
       input, select, textarea { width: 100%; border: 1px solid #d9d3c7; border-radius: 8px; padding: 6px 8px; background: #fff; color: inherit; }
       .file { display: block; margin: 12px 0; font-size: 13px; }
       .message { min-height: 1.2em; }
-      .warn { color: #8a4b08; font-size: 12px; }
       .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
-      .result { margin-top: 10px; }
-      .result ul { margin: 0; padding-left: 18px; }
+      .result-card { margin-top: 4px; }
+      .result-sum { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
+      .chip { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; line-height: 1.4; }
+      .chip.ok { background: rgba(22, 163, 74, 0.1); color: #15803d; }
+      .chip.check { background: #fffbeb; color: #b45309; }
+      .chip.miss { background: #f1f5f9; color: #64748b; }
+      .group { margin: 8px 8px 2px; font-size: 12px; font-weight: 600; color: #6d655b; }
+      .hit {
+        width: 100%; display: flex; align-items: baseline; gap: 10px; padding: 7px 8px;
+        border: 0; border-radius: 8px; background: transparent; text-align: left; font: inherit; cursor: pointer;
+      }
+      .hit:hover { background: #f8fafc; }
+      .hit b { flex: none; max-width: 46%; font-size: 13px; font-weight: 500; color: #1c1915; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hit span { flex: 1; min-width: 0; font-size: 12px; color: #64748b; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hit em { flex: none; font-style: normal; font-size: 12px; color: #0f766e; text-decoration: underline; }
       .foot a { color: #143d2c; word-break: break-all; }
     `;
   }
@@ -457,6 +559,17 @@ function boot() {
       GM_addStyle(`#${HOST_ID}{all:initial;position:fixed;right:16px;bottom:16px;z-index:2147483646;width:0;height:0;overflow:visible;}`);
     }
   } catch (_) { /* 样式写在影子树里 */ }
+
+  window.addEventListener('pointermove', moveResize);
+  window.addEventListener('pointerup', () => { resizeDrag = null; });
+  window.addEventListener('pointercancel', () => { resizeDrag = null; });
+
+  window.addEventListener('pagehide', () => {
+    try {
+      syncFromDom();
+      if (saveTimer) writeNow();
+    } catch (_) { /* 离开页面时能存下就存 */ }
+  });
 
   ensure();
   try {

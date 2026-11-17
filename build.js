@@ -10,7 +10,7 @@ const RAW = 'https://raw.githubusercontent.com/futao6206/getjob-net-apply/main/d
 const HEADER = `// ==UserScript==
 // @name         网申自动填写
 // @namespace    https://github.com/futao6206/getjob-net-apply
-// @version      1.0.0
+// @version      1.1.0
 // @description  在北森、大易、Moka、国聘等网申页，用本机简历填写报名表。免费，不代提交。
 // @match        http://*/*
 // @match        https://*/*

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网申自动填写
 // @namespace    https://github.com/futao6206/getjob-net-apply
-// @version      1.0.0
+// @version      1.1.0
 // @description  在北森、大易、Moka、国聘等网申页，用本机简历填写报名表。免费，不代提交。
 // @match        http://*/*
 // @match        https://*/*
@@ -2974,12 +2974,35 @@ ${sample}`) && fillable < 3;
       profile: Object.assign({}, saved.profile),
       sources: Object.assign({}, saved.sources),
       message: "",
+      savedNote: false,
+      panelHeight: 0,
       rows: []
     };
     let shadow = null;
-    function draftDirty() {
-      const current = readSaved();
-      return core.FIELD_KEYS.some((key) => String(state.profile[key] || "") !== String(current.profile[key] || ""));
+    let saveTimer = null;
+    function writeNow() {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      const next = writeSaved(state.profile, state.sources);
+      state.savedNote = true;
+      const active = shadow && shadow.activeElement;
+      core.FIELD_KEYS.forEach((key) => {
+        state.sources[key] = next.sources[key];
+        if (active && active.getAttribute && active.getAttribute("data-key") === key) return;
+        state.profile[key] = next.profile[key];
+      });
+    }
+    function scheduleSave() {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        writeSaved(state.profile, state.sources);
+        state.savedNote = true;
+        const note = shadow && shadow.querySelector("[data-save-state]");
+        if (note) note.textContent = "\u5DF2\u81EA\u52A8\u4FDD\u5B58\u5728\u8FD9\u53F0\u7535\u8111\u3002";
+      }, 400);
     }
     function syncFromDom() {
       if (!shadow || state.painting) return;
@@ -3007,16 +3030,23 @@ ${sample}`) && fillable < 3;
     }
     function resultsHtml() {
       if (!state.rows.length) return "";
-      const groups = [
-        ["filled", "\u5DF2\u586B"],
-        ["check", "\u5F85\u6838\u5BF9"],
-        ["miss", "\u7559\u7A7A"]
-      ];
-      return groups.map(([status, title]) => {
-        const rows = state.rows.filter((row) => row.status === status);
-        const items = rows.length ? rows.map((row) => `<li><b>${esc(row.label || "\u672A\u547D\u540D")}</b> ${esc(row.text || "")}</li>`).join("") : '<li class="muted">\u65E0</li>';
-        return `<section class="result"><h3>${title}</h3><ul>${items}</ul></section>`;
-      }).join("");
+      const groups = { filled: [], check: [], miss: [] };
+      state.rows.forEach((row, index) => {
+        const bucket = row.status === "filled" ? "filled" : row.status === "check" ? "check" : "miss";
+        groups[bucket].push(Object.assign({ index }, row));
+      });
+      const rowHtml = (row) => {
+        const copy = row.copy ? `<em data-act="copy" data-row="${row.index}">\u590D\u5236</em>` : "";
+        const fix = row.fix ? `<em data-act="fix" data-fix="${esc(row.fix)}">\u53BB\u8865</em>` : "";
+        const text = row.text || "";
+        return `<button type="button" class="hit" data-act="scroll" data-id="${esc(row.id)}"><b>${esc(row.label || "\u672A\u547D\u540D")}</b><span title="${esc(text)}">${esc(text)}</span>${copy}${fix}</button>`;
+      };
+      const group = (title, list) => list.length ? `<div class="bucket"><div class="group">${title}</div>${list.map(rowHtml).join("")}</div>` : "";
+      const chip = (cls, title, count) => `<span class="chip ${cls}">${title} ${count}</span>`;
+      return `<div class="result-card">
+      <div class="result-sum">${chip("ok", "\u5DF2\u586B", groups.filled.length)}${chip("check", "\u5F85\u6838\u5BF9", groups.check.length)}${chip("miss", "\u6CA1\u586B\u4E0A", groups.miss.length)}</div>
+      <div class="result-body">${group("\u5DF2\u586B", groups.filled)}${group("\u5F85\u6838\u5BF9", groups.check)}${group("\u6CA1\u586B\u4E0A", groups.miss)}</div>
+    </div>`;
     }
     function panelHtml() {
       const sections = core.SECTIONS.map((section) => {
@@ -3027,19 +3057,20 @@ ${sample}`) && fillable < 3;
         const note = section.note ? `<p class="note">${esc(section.note)}</p>` : "";
         return `<section><h2>${esc(section.title)}</h2>${note}${fields}</section>`;
       }).join("");
-      const dirty = draftDirty() ? '<p class="warn">\u6709\u4FEE\u6539\u8FD8\u6CA1\u4FDD\u5B58\uFF0C\u8FD9\u6B21\u586B\u5199\u4ECD\u7528\u5DF2\u4FDD\u5B58\u7684\u8D44\u6599\u3002</p>' : "";
-      return `<div class="panel" role="dialog" aria-label="\u7F51\u7533\u81EA\u52A8\u586B\u5199">
-      <header><strong>\u7F51\u7533\u81EA\u52A8\u586B\u5199</strong><button type="button" data-act="close">\u6536\u8D77</button></header>
+      const saveNote = state.savedNote ? "\u5DF2\u81EA\u52A8\u4FDD\u5B58\u5728\u8FD9\u53F0\u7535\u8111\u3002" : "\u4FEE\u6539\u4F1A\u81EA\u52A8\u4FDD\u5B58\u5728\u8FD9\u53F0\u7535\u8111\uFF0C\u4E0D\u4E0A\u4F20\u3002";
+      const heightStyle = state.panelHeight ? ` style="height:${state.panelHeight}px;max-height:${state.panelHeight}px"` : "";
+      return `<div class="panel" role="dialog" aria-label="\u7F51\u7533\u81EA\u52A8\u586B\u5199"${heightStyle}>
+      <div class="resize-top" data-act="resize" title="\u6309\u4F4F\u5411\u4E0A\u62D6\uFF0C\u52A0\u5927\u663E\u793A\u533A\u57DF"></div>
+      <header data-act="resize"><strong>\u7F51\u7533\u81EA\u52A8\u586B\u5199</strong><button type="button" data-act="close">\u6536\u8D77</button></header>
       <div class="body">
-        <p class="lead">\u7528\u672C\u673A\u7B80\u5386\u586B\u5F53\u524D\u8FD9\u4E00\u5F20\u8868\u3002\u811A\u672C\u4E0D\u4EE3\u70B9\u63D0\u4EA4\u3002</p>
+        <p class="lead">\u7528\u4E0A\u9762\u7684\u8D44\u6599\u586B\u5199\u4F60\u6B63\u5728\u770B\u7684\u8FD9\u4E00\u9875\u3002\u811A\u672C\u4E0D\u4EE3\u70B9\u63D0\u4EA4\u3002</p>
         ${sections}
         <label class="file">\u9009\u62E9\u6587\u5B57\u7248 PDF<input type="file" accept="application/pdf,.pdf" data-act="pdf"></label>
         <p class="message" role="status">${esc(state.message)}</p>
-        ${dirty}
+        <p class="hint" data-save-state>${saveNote}</p>
         <div class="actions">
-          <button type="button" data-act="save">\u4FDD\u5B58</button>
           <button type="button" data-act="clear">\u6E05\u7A7A\u8D44\u6599</button>
-          <button type="button" data-act="fill">\u6309\u7B80\u5386\u586B\u5199</button>
+          <button type="button" data-act="fill">\u81EA\u52A8\u586B\u5199\u5F53\u524D\u9875\u9762</button>
         </div>
         <div class="results">${resultsHtml()}</div>
         <p class="foot"><a href="${PANEL_LINK}" target="_blank" rel="noopener noreferrer">\u6253\u5F00 GetJob \u5B98\u7F51\u5373\u53EF\u76F4\u63A5\u4F53\u9A8C\uFF1A${PANEL_LINK}</a></p>
@@ -3058,13 +3089,10 @@ ${sample}`) && fillable < 3;
         if (state.painting) return;
         const el = event.currentTarget;
         const key = el.getAttribute("data-key");
+        if (!key || el.value === state.profile[key]) return;
         state.profile[key] = el.value;
         state.sources[key] = "user";
-        const warn = shadow.querySelector(".warn");
-        if (!warn && draftDirty()) {
-          const message = shadow.querySelector(".message");
-          if (message) message.insertAdjacentHTML("afterend", '<p class="warn">\u6709\u4FEE\u6539\u8FD8\u6CA1\u4FDD\u5B58\uFF0C\u8FD9\u6B21\u586B\u5199\u4ECD\u7528\u5DF2\u4FDD\u5B58\u7684\u8D44\u6599\u3002</p>');
-        }
+        scheduleSave();
       }
       shadow.querySelectorAll("button, a, input, select, textarea").forEach((el) => {
         el.addEventListener("mousedown", (event) => event.stopPropagation());
@@ -3078,6 +3106,8 @@ ${sample}`) && fillable < 3;
       const close = shadow.querySelector('[data-act="close"]');
       if (close) {
         close.addEventListener("click", () => {
+          syncFromDom();
+          if (saveTimer) writeNow();
           state.open = false;
           state.rows = [];
           state.message = "";
@@ -3096,25 +3126,75 @@ ${sample}`) && fillable < 3;
           if (picked) ingest(picked);
         });
       }
-      const save = shadow.querySelector('[data-act="save"]');
-      if (save) save.addEventListener("click", onSave);
       const clear = shadow.querySelector('[data-act="clear"]');
       if (clear) clear.addEventListener("click", onClear);
       const fill = shadow.querySelector('[data-act="fill"]');
       if (fill) fill.addEventListener("click", onFill);
+      shadow.querySelectorAll('[data-act="resize"]').forEach((el) => {
+        el.addEventListener("pointerdown", startResize);
+      });
+      shadow.querySelectorAll('[data-act="scroll"]').forEach((el) => {
+        el.addEventListener("click", () => {
+          const id = el.getAttribute("data-id");
+          if (id) pageApi.scrollToNetApplyField(id);
+        });
+      });
+      shadow.querySelectorAll('[data-act="copy"]').forEach((el) => {
+        el.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const row = state.rows[Number(el.getAttribute("data-row"))];
+          if (!row || !row.copy) return;
+          const done = () => {
+            state.message = "\u5DF2\u590D\u5236\u8D44\u6599\u539F\u6587\u3002";
+            const message = shadow.querySelector(".message");
+            if (message) message.textContent = state.message;
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(row.copy).then(done).catch(() => {
+            });
+          }
+        });
+      });
+      shadow.querySelectorAll('[data-act="fix"]').forEach((el) => {
+        el.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const field = shadow.querySelector(`[data-key="${el.getAttribute("data-fix") || ""}"]`);
+          if (!field) return;
+          field.scrollIntoView({ block: "center", behavior: "smooth" });
+          field.focus();
+        });
+      });
     }
-    function onSave() {
-      syncFromDom();
-      const next = writeSaved(state.profile, state.sources);
-      state.profile = Object.assign({}, next.profile);
-      state.sources = Object.assign({}, next.sources);
-      state.message = "\u8D44\u6599\u5DF2\u4FDD\u5B58\u5728\u8FD9\u53F0\u7535\u8111\u7684\u811A\u672C\u91CC\u3002";
-      paint();
+    let resizeDrag = null;
+    function startResize(event) {
+      if (event.button != null && event.button !== 0) return;
+      if (event.target && event.target.closest && event.target.closest("button")) return;
+      const panel = shadow && shadow.querySelector(".panel");
+      if (!panel) return;
+      resizeDrag = { startY: event.clientY, height: panel.getBoundingClientRect().height };
+      event.preventDefault();
+    }
+    function moveResize(event) {
+      if (!resizeDrag) return;
+      const panel = shadow && shadow.querySelector(".panel");
+      if (!panel) return;
+      const max = Math.max(280, window.innerHeight - 24);
+      const height = Math.round(Math.max(280, Math.min(resizeDrag.height + (resizeDrag.startY - event.clientY), max)));
+      state.panelHeight = height;
+      panel.style.height = `${height}px`;
+      panel.style.maxHeight = `${height}px`;
     }
     function onClear() {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
       const empty = writeSaved(core.emptyProfile(), core.emptySources());
       state.profile = Object.assign({}, empty.profile);
       state.sources = Object.assign({}, empty.sources);
+      state.savedNote = false;
       state.rows = [];
       state.message = "\u8D44\u6599\u5DF2\u6E05\u7A7A\u3002";
       paint();
@@ -3140,15 +3220,17 @@ ${sample}`) && fillable < 3;
       const merged = core.mergePdfProfile(state.profile, state.sources, extracted);
       state.profile = merged.profile;
       state.sources = merged.sources;
-      state.message = "\u5DF2\u4ECE PDF \u5199\u5165\u8349\u7A3F\u3002\u6838\u5BF9\u540E\u70B9\u4FDD\u5B58\uFF0C\u518D\u53BB\u62A5\u540D\u9875\u586B\u5199\u3002";
+      writeNow();
+      state.message = "\u5DF2\u4ECE PDF \u5199\u5165\u5E76\u81EA\u52A8\u4FDD\u5B58\u3002\u6838\u5BF9\u540E\u70B9\u300C\u81EA\u52A8\u586B\u5199\u5F53\u524D\u9875\u9762\u300D\u3002";
       paint();
     }
     async function onFill() {
       if (state.busy) return;
       syncFromDom();
+      writeNow();
       const saved2 = readSaved();
       if (!core.filledKeys(saved2.profile).length) {
-        state.message = "\u5148\u4FDD\u5B58\u8D44\u6599\uFF0C\u518D\u586B\u5199\u3002";
+        state.message = "\u4E0A\u9762\u8FD8\u662F\u7A7A\u7684\u3002\u5148\u5199\u8D44\u6599\uFF0C\u6216\u9009\u4E00\u4EFD PDF\uFF0C\u518D\u70B9\u300C\u81EA\u52A8\u586B\u5199\u5F53\u524D\u9875\u9762\u300D\u3002";
         state.rows = [];
         paint();
         return;
@@ -3217,8 +3299,16 @@ ${sample}`) && fillable < 3;
         background: #fff; color: #1c1915; border: 1px solid #d9d3c7; border-radius: 12px;
         box-shadow: 0 12px 40px rgba(28, 25, 21, 0.18);
       }
+      .resize-top {
+        flex: none; height: 10px; cursor: ns-resize; position: relative;
+      }
+      .resize-top::after {
+        content: ''; position: absolute; left: 50%; top: 4px; width: 36px; height: 3px;
+        margin-left: -18px; border-radius: 999px; background: #d9d3c7;
+      }
       header, .body { padding: 12px 14px; }
-      header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee6d8; }
+      header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee6d8; cursor: ns-resize; user-select: none; }
+      header button { cursor: pointer; }
       header button, .actions button { border: 1px solid #d9d3c7; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
       .actions button[data-act="fill"] { background: #143d2c; color: #fff; border-color: #143d2c; }
       .body { overflow: auto; }
@@ -3231,10 +3321,22 @@ ${sample}`) && fillable < 3;
       input, select, textarea { width: 100%; border: 1px solid #d9d3c7; border-radius: 8px; padding: 6px 8px; background: #fff; color: inherit; }
       .file { display: block; margin: 12px 0; font-size: 13px; }
       .message { min-height: 1.2em; }
-      .warn { color: #8a4b08; font-size: 12px; }
       .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
-      .result { margin-top: 10px; }
-      .result ul { margin: 0; padding-left: 18px; }
+      .result-card { margin-top: 4px; }
+      .result-sum { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
+      .chip { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; line-height: 1.4; }
+      .chip.ok { background: rgba(22, 163, 74, 0.1); color: #15803d; }
+      .chip.check { background: #fffbeb; color: #b45309; }
+      .chip.miss { background: #f1f5f9; color: #64748b; }
+      .group { margin: 8px 8px 2px; font-size: 12px; font-weight: 600; color: #6d655b; }
+      .hit {
+        width: 100%; display: flex; align-items: baseline; gap: 10px; padding: 7px 8px;
+        border: 0; border-radius: 8px; background: transparent; text-align: left; font: inherit; cursor: pointer;
+      }
+      .hit:hover { background: #f8fafc; }
+      .hit b { flex: none; max-width: 46%; font-size: 13px; font-weight: 500; color: #1c1915; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hit span { flex: 1; min-width: 0; font-size: 12px; color: #64748b; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hit em { flex: none; font-style: normal; font-size: 12px; color: #0f766e; text-decoration: underline; }
       .foot a { color: #143d2c; word-break: break-all; }
     `;
     }
@@ -3254,6 +3356,20 @@ ${sample}`) && fillable < 3;
       }
     } catch (_) {
     }
+    window.addEventListener("pointermove", moveResize);
+    window.addEventListener("pointerup", () => {
+      resizeDrag = null;
+    });
+    window.addEventListener("pointercancel", () => {
+      resizeDrag = null;
+    });
+    window.addEventListener("pagehide", () => {
+      try {
+        syncFromDom();
+        if (saveTimer) writeNow();
+      } catch (_) {
+      }
+    });
     ensure();
     try {
       const observer = new MutationObserver(() => ensure());

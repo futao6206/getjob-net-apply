@@ -26,8 +26,8 @@
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。Chrome、Edge 也可以用 Violentmonkey；下面以 Tampermonkey 为准。
 2. 打开浏览器的扩展管理，打开开发者模式。点进 Tampermonkey 的详情，打开「允许用户脚本」。
 3. 安装本脚本。体积允许时，用 Greasy Fork 页的「安装此脚本」。放不下时，打开 GitHub 上的 Raw，由 Tampermonkey 弹出安装页：<https://raw.githubusercontent.com/futao6206/getjob-net-apply/main/dist/getjob-net-apply.user.js>
-4. 点页面右下角「网申填写」，手填资料，或选一份文字版 PDF，然后点保存。
-5. 用已经登录的浏览器打开公司报名页，点「按简历填写」。
+4. 点页面右下角「网申填写」，手填资料，或选一份文字版 PDF。修改会自动保存在这台电脑。
+5. 用已经登录的浏览器打开公司报名页，点「自动填写当前页面」。这个按钮只填当前这一页。
 6. 自己看一遍空格，再自己点报名站的提交。脚本不代点提交。
 
 `vendor/pdfjs` 里的 pdf.js 为 Apache-2.0，文件头保留原说明，不改成 MIT。其余代码为 MIT。
