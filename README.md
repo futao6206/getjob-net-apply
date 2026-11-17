@@ -4,6 +4,12 @@
 
 不填写 BOSS直聘、智联、猎聘、前程无忧的职位页和聊天页。
 
+## 演示
+
+[![自动填写网申工具：40个字段3秒填完](https://i2.hdslb.com/bfs/archive/8efe919e379d85d108cceb6e0b84d333d7a2b1e3.jpg)](https://www.bilibili.com/video/BV1aLWQ64EpJ/)
+
+点封面打开 B 站视频：[自动填写网申工具：40个字段3秒填完](https://www.bilibili.com/video/BV1aLWQ64EpJ/)
+
 ### 证件号
 
 桌面端不保存证件号，也不替你填写。这个脚本没有登录，也不会上传。证件号只留在你这台电脑的脚本管理器里，用来填当前报名表。以本仓库的脚本为准。
