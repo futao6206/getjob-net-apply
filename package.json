@@ -1,0 +1,15 @@
+{
+  "name": "getjob-net-apply",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "在公司招聘页用本机简历填写报名表。免费，不代点提交。",
+  "scripts": {
+    "test": "node test/core.test.js && node test/page.test.js",
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2",
+    "jsdom": "25.0.1"
+  }
+}
